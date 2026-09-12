@@ -341,20 +341,18 @@ export async function POST(request: Request) {
   const context = `Problem: ${problem} (${body.difficulty || "unknown difficulty"})\nStep: ${step}\nProblem brief: ${getMasteryPrompt(problem).brief}\nCanonical rubric for this step:\n${formatRubricContext(problem, step)}\nCandidate answer:\n${answer.slice(0, 12000)}`;
 
   try {
-    const reviewerResults: PromiseSettledResult<Evaluation>[] = [];
     const reviewerMessages = [
       [{ role: "system" as const, content: evaluationSystem }, { role: "user" as const, content: context }],
       [{ role: "system" as const, content: evaluationSystem }, { role: "user" as const, content: `${context}\n\nIndependently verify the answer. Re-read it from the beginning and check every conditional, comment, and state transition before returning the evaluation.` }],
     ];
-    // Keep the independent checks sequential. This avoids bursting a small
-    // hosted-model quota with two large requests at the same instant.
-    for (const messages of reviewerMessages) {
-      try {
-        reviewerResults.push({ status: "fulfilled", value: await requestStructuredJson<Evaluation>(client, messages, evaluationSchema, "lld_evaluation", Math.min(1800, Math.max(900, 300 + rubric.length * 170))) });
-      } catch (reason) {
-        reviewerResults.push({ status: "rejected", reason });
-      }
-    }
+    // Run both checks in the same request window, but stagger the second one
+    // slightly to avoid a hard burst against small hosted-model quotas.
+    const evaluatorTokens = Math.min(1300, Math.max(850, 280 + rubric.length * 130));
+    const reviewerPromises = reviewerMessages.map((messages, index) => (async () => {
+      if (index > 0) await new Promise((resolve) => setTimeout(resolve, 350));
+      return requestStructuredJson<Evaluation>(client, messages, evaluationSchema, "lld_evaluation", evaluatorTokens);
+    })());
+    const reviewerResults = await Promise.allSettled(reviewerPromises);
     const failedReviewers = reviewerResults.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     const successfulEvaluations = reviewerResults.filter((result): result is PromiseFulfilledResult<Evaluation> => result.status === "fulfilled").map((result) => normalizeEvaluation(result.value, rubric, answer));
     if (failedReviewers.length) {
@@ -369,7 +367,7 @@ export async function POST(request: Request) {
     const writerContext = `${context}\n\nVerified evidence map:\n${JSON.stringify(criterionResultsForUi(evaluation, rubric))}\n\nReviewer logic summary: ${evaluation.logicSummary}`;
     let generated: GeneratedFeedback;
     try {
-      generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback", 800);
+      generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback", 650);
     } catch (error) {
       console.error("LLM feedback writer failed; using verified deterministic summary", error);
       generated = feedbackFromEvaluation(evaluation, rubric, problem, step);
