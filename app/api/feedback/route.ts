@@ -177,11 +177,11 @@ function isLocalMlx() {
   return process.env.LLM_BASE_URL?.includes("127.0.0.1") || process.env.LLM_BASE_URL?.includes("localhost");
 }
 
-async function requestStructuredJson<T>(client: OpenAI, messages: Array<{ role: "system" | "user"; content: string }>, schema: typeof evaluationSchema | typeof feedbackSchema, name: string): Promise<T> {
+async function requestStructuredJson<T>(client: OpenAI, messages: Array<{ role: "system" | "user"; content: string }>, schema: typeof evaluationSchema | typeof feedbackSchema, name: string, maxTokens: number): Promise<T> {
   const requestOptions = {
     model: process.env.LLM_MODEL || "gpt-4.1-mini",
     messages,
-    max_tokens: 1400,
+    max_tokens: maxTokens,
     temperature: 0.1,
     ...(isLocalMlx() ? { extra_body: { chat_template_kwargs: { enable_thinking: false } } } : {}),
   };
@@ -316,10 +316,20 @@ export async function POST(request: Request) {
   const context = `Problem: ${problem} (${body.difficulty || "unknown difficulty"})\nStep: ${step}\nProblem brief: ${getMasteryPrompt(problem).brief}\nCanonical rubric for this step:\n${formatRubricContext(problem, step)}\nCandidate answer:\n${answer.slice(0, 12000)}`;
 
   try {
-    const reviewerResults = await Promise.allSettled([
-      requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: context }], evaluationSchema, "lld_evaluation_a"),
-      requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: `${context}\n\nIndependently verify the answer. Re-read it from the beginning and check every conditional, comment, and state transition before returning the evaluation.` }], evaluationSchema, "lld_evaluation_b"),
-    ]);
+    const reviewerResults: PromiseSettledResult<Evaluation>[] = [];
+    const reviewerMessages = [
+      [{ role: "system" as const, content: evaluationSystem }, { role: "user" as const, content: context }],
+      [{ role: "system" as const, content: evaluationSystem }, { role: "user" as const, content: `${context}\n\nIndependently verify the answer. Re-read it from the beginning and check every conditional, comment, and state transition before returning the evaluation.` }],
+    ];
+    // Keep the independent checks sequential. This avoids bursting a small
+    // hosted-model quota with two large requests at the same instant.
+    for (const messages of reviewerMessages) {
+      try {
+        reviewerResults.push({ status: "fulfilled", value: await requestStructuredJson<Evaluation>(client, messages, evaluationSchema, "lld_evaluation", 900) });
+      } catch (reason) {
+        reviewerResults.push({ status: "rejected", reason });
+      }
+    }
     const failedReviewers = reviewerResults.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     const successfulEvaluations = reviewerResults.filter((result): result is PromiseFulfilledResult<Evaluation> => result.status === "fulfilled").map((result) => normalizeEvaluation(result.value, rubric, answer));
     if (failedReviewers.length) {
@@ -334,7 +344,7 @@ export async function POST(request: Request) {
     const writerContext = `${context}\n\nVerified evidence map:\n${JSON.stringify(criterionResultsForUi(evaluation, rubric))}\n\nReviewer logic summary: ${evaluation.logicSummary}`;
     let generated: GeneratedFeedback;
     try {
-      generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback");
+      generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback", 800);
     } catch (error) {
       console.error("LLM feedback writer failed; using verified deterministic summary", error);
       generated = feedbackFromEvaluation(evaluation, rubric, problem, step);
