@@ -9,6 +9,7 @@ import {
 } from "../../../lib/mastery-prompts";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 type ScoreBand = "RED" | "ORANGE" | "LIGHT GREEN" | "DARK GREEN";
 type EvaluationStatus = "covered" | "implicit" | "ambiguous" | "missing" | "contradicted";
@@ -251,6 +252,21 @@ function criterionResultsForUi(evaluation: Evaluation, rubric: RubricCriterion[]
   }));
 }
 
+function feedbackFromEvaluation(evaluation: Evaluation, rubric: RubricCriterion[], problem: string, step: string): GeneratedFeedback {
+  const byId = new Map(rubric.map((criterion) => [criterion.id, criterion]));
+  const strengths = evaluation.criteria.filter((item) => item.status === "covered" || item.status === "implicit").slice(0, 3).map((item) => `Your response addresses ${byId.get(item.id)?.label || "this criterion"}.`);
+  const issues = evaluation.criteria.filter((item) => item.status === "missing" || item.status === "contradicted" || item.status === "ambiguous").slice(0, 2);
+  const gaps = issues.map((item) => `${item.status === "contradicted" ? "The response conflicts with" : item.status === "ambiguous" ? "Clarify" : "Add"} ${byId.get(item.id)?.label || "this criterion"}.`);
+  const suggestions = issues.slice(0, 3).map((item) => `Show the relevant ${byId.get(item.id)?.label || "behavior"} in one concrete sentence, condition, or state transition.`);
+  return {
+    summary: strengths.length ? `Your ${step.toLowerCase()} response for ${problem} has a coherent core and covers ${strengths.length} key ${strengths.length === 1 ? "criterion" : "criteria"}.` : `Your ${step.toLowerCase()} response for ${problem} needs a clearer core before it can be evaluated confidently.`,
+    strengths,
+    gaps,
+    suggestions,
+    nextImprovement: gaps[0] || `Keep the ${step.toLowerCase()} flow concise and make the ownership or state transition explicit.`,
+  };
+}
+
 export async function POST(request: Request) {
   let body: { problem?: string; difficulty?: string; step?: string; stepPrompt?: string; answer?: string };
   try {
@@ -290,14 +306,22 @@ export async function POST(request: Request) {
   const context = `Problem: ${problem} (${body.difficulty || "unknown difficulty"})\nStep: ${step}\nProblem brief: ${getMasteryPrompt(problem).brief}\nCanonical rubric for this step:\n${formatRubricContext(problem, step)}\nCandidate answer:\n${answer.slice(0, 12000)}`;
 
   try {
-    const [rawFirst, rawSecond] = await Promise.all([
+    const reviewerResults = await Promise.allSettled([
       requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: context }], evaluationSchema, "lld_evaluation_a"),
       requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: `${context}\n\nIndependently verify the answer. Re-read it from the beginning and check every conditional, comment, and state transition before returning the evaluation.` }], evaluationSchema, "lld_evaluation_b"),
     ]);
-    const evaluation = combineEvaluations(normalizeEvaluation(rawFirst, rubric, answer), normalizeEvaluation(rawSecond, rubric, answer));
+    const successfulEvaluations = reviewerResults.filter((result): result is PromiseFulfilledResult<Evaluation> => result.status === "fulfilled").map((result) => normalizeEvaluation(result.value, rubric, answer));
+    if (!successfulEvaluations.length) throw new Error("Both independent feedback reviewers failed.");
+    const evaluation = successfulEvaluations.length === 1 ? { ...successfulEvaluations[0], logicSummary: `${successfulEvaluations[0].logicSummary} Only one reviewer was available for this review.` } : combineEvaluations(successfulEvaluations[0], successfulEvaluations[1]);
     const derived = deriveScore(evaluation, rubric, answer);
     const writerContext = `${context}\n\nVerified evidence map:\n${JSON.stringify(criterionResultsForUi(evaluation, rubric))}\n\nReviewer logic summary: ${evaluation.logicSummary}`;
-    const generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback");
+    let generated: GeneratedFeedback;
+    try {
+      generated = await requestStructuredJson<GeneratedFeedback>(client, [{ role: "system", content: writerSystem }, { role: "user", content: writerContext }], feedbackSchema, "lld_feedback");
+    } catch (error) {
+      console.error("LLM feedback writer failed; using verified deterministic summary", error);
+      generated = feedbackFromEvaluation(evaluation, rubric, problem, step);
+    }
     return NextResponse.json({ feedback: { ...normalizeGeneratedFeedback(generated, problem, step), ...derived, criterionResults: criterionResultsForUi(evaluation, rubric) } });
   } catch (error) {
     console.error("LLM feedback request failed", error);
