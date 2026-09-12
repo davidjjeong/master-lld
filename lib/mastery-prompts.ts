@@ -7,6 +7,16 @@ export type MasteryPrompt = {
   extensibility: string;
 };
 
+export type MasteryStep = "Requirements" | "Entities" | "Class design" | "Implementation" | "Extensibility";
+export type RubricImportance = "core" | "supporting";
+export type RubricCriterion = {
+  id: string;
+  label: string;
+  importance: RubricImportance;
+  acceptableEvidence: string;
+  commonMisreadings: string;
+};
+
 export const masteryPrompts: Record<string, MasteryPrompt> = {
   "Amazon Locker": {
     brief: "Design a locker system like Amazon Locker where delivery drivers deposit packages and customers pick them up using a code.",
@@ -221,6 +231,58 @@ const genericMasteryPrompt: MasteryPrompt = {
 
 export function getMasteryPrompt(problem: string) {
   return masteryPrompts[problem] || genericMasteryPrompt;
+}
+
+function criterionId(step: MasteryStep, text: string, index: number) {
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
+  return `${step.toLowerCase().replace(/[^a-z]+/g, "-")}-${slug || index + 1}`;
+}
+
+function splitRubricText(text: string) {
+  return text
+    .split(/,\s*/)
+    .map((part) => part.trim().replace(/\.$/, ""))
+    .filter((part) => part.length > 0);
+}
+
+function rubricParts(step: MasteryStep, text: string) {
+  // Extensibility is intentionally one open-ended criterion. Commas in its
+  // sentence describe alternative follow-ups and should not become separate
+  // requirements that the candidate must all implement.
+  if (step === "Extensibility") return [text.trim().replace(/\.$/, "")];
+  return splitRubricText(text);
+}
+
+/**
+ * Derive the review criteria from the same per-problem mastery record used by
+ * the interviewer. Keeping this conversion here prevents the API route from
+ * maintaining a second, drifting answer key.
+ */
+export function getRubricCriteria(problem: string, step: MasteryStep): RubricCriterion[] {
+  const mastery = getMasteryPrompt(problem);
+  const source = step === "Requirements" ? mastery.requirements
+    : step === "Entities" ? mastery.entities
+      : step === "Class design" ? mastery.classDesign
+        : step === "Implementation" ? mastery.implementation
+          : mastery.extensibility;
+  return rubricParts(step, source).map((text, index) => ({
+    id: criterionId(step, text, index),
+    label: text,
+    importance: index < 2 ? "core" : "supporting",
+    acceptableEvidence: text,
+    commonMisreadings: "Do not require this exact wording when the candidate communicates the same behavior through a method, state transition, helper, or comment.",
+  }));
+}
+
+export function formatRubricContext(problem: string, step: MasteryStep) {
+  return getRubricCriteria(problem, step)
+    .map((criterion) => `- ${criterion.id} [${criterion.importance}]: ${criterion.label}\n  Accept reasonable evidence such as: ${criterion.acceptableEvidence}\n  Avoid false positives: ${criterion.commonMisreadings}`)
+    .join("\n");
+}
+
+export function formatClarificationContext(problem: string) {
+  const mastery = getMasteryPrompt(problem);
+  return `Problem brief: ${mastery.brief}\nConfirmed requirement direction: ${mastery.requirements}`;
 }
 
 export function formatMasteryContext(problem: string) {

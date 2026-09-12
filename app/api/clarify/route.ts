@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-import { formatMasteryContext } from "../../../lib/mastery-prompts";
+import { formatClarificationContext } from "../../../lib/mastery-prompts";
 
 export const runtime = "nodejs";
 
@@ -44,7 +44,9 @@ export async function POST(request: Request) {
     if (answer) return NextResponse.json({ answer });
   }
 
-  const masteryContext = formatMasteryContext(body.problem);
+  // Clarification should expose only the problem contract, not future-step
+  // entities, APIs, implementation, or extensibility guidance.
+  const masteryContext = formatClarificationContext(body.problem);
   const system = `You are the interviewer for a 30–45 minute low-level design practice session with a new graduate engineer. The problem is ${body.problem} (${body.difficulty}). The authoritative mastery prompt is below; use it to answer consistently, but reveal only the minimum needed for the candidate's exact question.
 
 ${masteryContext}

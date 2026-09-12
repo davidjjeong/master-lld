@@ -78,6 +78,18 @@
 .followup-panel{margin:18px 0 0;padding:14px 15px;background:#f7fbfa;border:1px solid #d9eeea;border-radius:12px}
 .followup-heading{display:flex;justify-content:space-between;gap:12px;align-items:center}
 .followup-heading strong{font-size:13px;color:#2d3b42}
+
+/* Expandable evidence makes every generated review auditable without crowding the default panel. */
+.feedback-audit{margin-top:18px;border-top:1px solid #f0e2de;padding-top:12px}
+.feedback-audit summary{cursor:pointer;color:var(--orange);font-size:12px;font-weight:600}
+.audit-list{display:grid;gap:8px;margin-top:10px}
+.audit-item{padding:9px 10px;border:1px solid #f1e5e1;border-radius:8px;background:#fffaf8;font-size:11px}
+.audit-item strong{display:block;font-size:11px}
+.audit-item>span{display:block;color:#a06e61;font:10px 'DM Mono',monospace;text-transform:uppercase;margin-top:3px}
+.audit-item small{display:block;margin-top:5px;color:#8b7771;font-size:10px;line-height:1.4}
+.audit-item q{display:block;margin-top:5px;color:#65727b;font-style:italic;line-height:1.4}
+.audit-item.status-missing,.audit-item.status-contradicted{border-color:#f2b9a9}
+.audit-item.status-ambiguous{border-color:#f0d0a6}
 .followup-heading span{font:10px 'DM Mono',monospace;color:#2da497;text-transform:uppercase;letter-spacing:.4px}
 .followup-question,.followup-placeholder{font-size:12px;line-height:1.5;color:#53616d;margin:10px 0 12px}
 .followup-placeholder{color:#87939a}

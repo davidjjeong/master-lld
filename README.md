@@ -57,6 +57,12 @@ SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
 
 The publishable key is intended for browser use when the row-level-security policies remain enabled. The service-role key is needed only for the server-side Delete account action; never expose it as `NEXT_PUBLIC_...` or commit it. Supabase’s free tier is a reasonable starting point for this personal practice app, though its project inactivity pause and quota limits still apply.
 
+## Feedback reliability
+
+Feedback is evaluated against the same per-problem mastery prompt that drives the practice experience. The feedback route first asks two independent reviewers to classify each criterion as covered, implicit, ambiguous, missing, or contradicted, with exact evidence from the submitted response. A disagreement is treated conservatively as ambiguous; it is not turned into a hard penalty. The score band is then derived on the server, and a separate writer turns only the verified evidence into concise coaching sections. Empty sections are handled deterministically as RED without calling the model.
+
+This does not make an open-ended interview rubric mathematically objective, so the UI exposes an expandable “Why this feedback?” audit showing the criterion, status, and evidence used. When changing a mastery prompt, review all five step criteria for that problem because those criteria are the source of truth for clarification, grading, and suggestions.
+
 ## Deploy to Vercel
 
 Vercel can host the Next.js app and connect to the hosted Supabase project, but it cannot reach the local MLX server at `127.0.0.1`. For production AI feedback, use a hosted OpenAI-compatible provider such as Groq:
