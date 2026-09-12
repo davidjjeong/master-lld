@@ -109,7 +109,10 @@ function evidenceExcerpt(criterion: RubricCriterion, answer: string) {
     const score = prefixes.reduce((total, prefix) => total + (chunkPrefixes.has(prefix) ? 1 : 0), 0);
     if (score > best.score) best = { score, text: chunk };
   }
-  const minimumScore = prefixes.length > 3 ? 2 : 1;
+  // A single high-signal domain term can be sufficient evidence. Requiring
+  // multiple terms in one sentence incorrectly marks concise flow statements
+  // such as “the driver can deposit” as ambiguous.
+  const minimumScore = 1;
   return best.score >= minimumScore ? best.text.slice(0, 240) : "";
 }
 
@@ -148,6 +151,10 @@ function combineEvaluations(first: Evaluation, second: Evaluation) {
     if (bothPositive) {
       return { ...item, status: item.status === "covered" || other.status === "covered" ? "covered" as const : "implicit" as const, evidence: item.evidence || other.evidence };
     }
+    const itemPositive = item.status === "covered" || item.status === "implicit";
+    const otherPositive = other.status === "covered" || other.status === "implicit";
+    if (itemPositive && other.status === "ambiguous") return item;
+    if (otherPositive && item.status === "ambiguous") return other;
     if (item.status === other.status) return item;
     const evidence = item.evidence || other.evidence;
     return {
@@ -166,10 +173,9 @@ function deriveScore(evaluation: Evaluation, rubric: RubricCriterion[], answer: 
   const byId = new Map(rubric.map((criterion) => [criterion.id, criterion]));
   const coreIssues = evaluation.criteria.filter((item) => byId.get(item.id)?.importance === "core" && (item.status === "missing" || item.status === "contradicted"));
   const supportingIssues = evaluation.criteria.filter((item) => byId.get(item.id)?.importance === "supporting" && (item.status === "missing" || item.status === "contradicted"));
-  const ambiguous = evaluation.criteria.some((item) => item.status === "ambiguous");
   if (coreIssues.length >= 2) return { score: "ORANGE" as ScoreBand, numericScore: 5 };
   if (coreIssues.length === 1 || supportingIssues.length >= 2) return { score: "LIGHT GREEN" as ScoreBand, numericScore: 7 };
-  if (supportingIssues.length === 1 || ambiguous) return { score: "DARK GREEN" as ScoreBand, numericScore: 8 };
+  if (supportingIssues.length === 1) return { score: "DARK GREEN" as ScoreBand, numericScore: 8 };
   return { score: "DARK GREEN" as ScoreBand, numericScore: 9 };
 }
 
@@ -221,6 +227,8 @@ For every criterion, choose exactly one status:
 - contradicted: the answer explicitly says or implements something incompatible with the criterion.
 
 Use exact short excerpts from the candidate answer as evidence for covered, implicit, and contradicted. Do not invent evidence. A reasonable alternative design is not a contradiction. Do not penalize a candidate for omitting details that belong to another step or are outside the exercise. Do not demand a specific class or return type when the candidate's design preserves the same invariant and behavior. If a condition or comment makes the behavior clear, count it even when the prose is not explicit.
+
+For Requirements, a concise statement of an operation and its success/failure outcome is enough to cover that flow; do not demand implementation-level state transitions in the Requirements answer. For Class Design and Implementation, inspect the actual methods, conditions, and comments before calling a behavior missing.
 
 Do not reward or penalize based on a generic checklist. The rubric is problem-specific. Pay special attention to the actual values and rules in the rubric, including exact sizes, durations, lifecycle states, and failure behavior. Return a careful criterion-by-criterion judgment, not feedback prose.`;
 
