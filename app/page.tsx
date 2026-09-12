@@ -7,7 +7,7 @@ import { createClient, isSupabaseConfigured } from "../lib/supabase/client";
 
 type Problem = { id: string; title: string; difficulty: "Easy" | "Medium" | "Hard"; time: string; description: string; icon: string; tone: string };
 type CriterionResult = { id: string; label: string; importance: "core" | "supporting"; status: "covered" | "implicit" | "ambiguous" | "missing" | "contradicted"; evidence: string; rationale: string; confidence: number };
-type Feedback = { score: string; numericScore: number; summary: string; strengths: string[]; gaps: string[]; suggestions: string[]; nextImprovement: string; criterionResults?: CriterionResult[] };
+type Feedback = { score: string; numericScore: number; summary: string; strengths: string[]; gaps: string[]; suggestions: string[]; nextImprovement: string; reviewerUnavailable?: boolean; criterionResults?: CriterionResult[] };
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type Tab = "answer" | "questions" | "feedback" | "suggestions";
 type SavedPractice = {
@@ -324,7 +324,7 @@ export default function Home() {
       const response = await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ problem: selected.title, difficulty: selected.difficulty, step: steps[step], stepPrompt: getStepPrompt(selected, steps[step], followUpQuestion), answer: currentSection }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Feedback failed.");
-      setFeedback(payload.feedback); setStepScores((current) => ({ ...current, [step]: payload.feedback.score })); setTab("feedback");
+      setFeedback(payload.feedback); if (!payload.feedback.reviewerUnavailable && payload.feedback.score) setStepScores((current) => ({ ...current, [step]: payload.feedback.score })); setTab("feedback");
     } catch (e) { setError(e instanceof Error ? e.message : "Feedback failed."); setTab("feedback"); }
     finally { setLoading(false); }
   }
@@ -563,6 +563,7 @@ const stepGuidance = {
 function FeedbackPanel({ feedback, error, problem, step }: { feedback: Feedback | null; error: string; problem: string; step: string }) {
   if (error) return <div className="coach-card-body error"><strong>Couldn’t review this yet</strong><p>{error}</p></div>;
   if (!feedback) return <div className="coach-card-body"><strong>AI feedback</strong><p>Submit your answer to get an encouraging, specific review of your {problem} {step.toLowerCase()} response.</p></div>;
+  if (feedback.reviewerUnavailable) return <div className="coach-card-body error"><strong>AI reviewer temporarily unavailable</strong><p>{feedback.summary}</p><p>{feedback.nextImprovement}</p></div>;
   const labels: Record<string, string> = { RED: "Needs a reset", ORANGE: "Needs work", "LIGHT GREEN": "Good, needs work", "DARK GREEN": "Interview ready" };
   return <div className="coach-card-body feedback-result"><div className="feedback-context">{problem} · {step} feedback</div><div className="score-row"><strong><span className={`feedback-score-dot ${scoreClass(feedback.score)}`} aria-hidden="true" />{labels[feedback.score] || "Reviewed"}</strong></div><p>{feedback.summary}</p><strong>What went well</strong>{feedback.strengths.map((item) => <p className="feedback-item" key={item}>● {item}</p>)}{feedback.gaps.length > 0 && <><strong>What needs improvement</strong><p className="feedback-item improvement-item">● {feedback.gaps[0]}</p></>}{feedback.gaps.length > 1 && <><strong>Minor suggestions</strong>{feedback.gaps.slice(1).map((item) => <p className="feedback-item" key={item}>● {item}</p>)}</>}<strong>Next step</strong><p>{feedback.nextImprovement}</p>{feedback.criterionResults?.length ? <details className="feedback-audit"><summary>Why this feedback?</summary><div className="audit-list">{feedback.criterionResults.map((criterion) => <div className={`audit-item status-${criterion.status}`} key={criterion.id}><strong>{criterion.label}</strong><span>{criterion.status}</span>{criterion.evidence && <q>{criterion.evidence}</q>}<small>{criterion.rationale}</small></div>)}</div></details> : null}</div>;
 }

@@ -267,6 +267,16 @@ function feedbackFromEvaluation(evaluation: Evaluation, rubric: RubricCriterion[
   };
 }
 
+function feedbackWhenReviewersUnavailable(problem: string, step: string): GeneratedFeedback {
+  return {
+    summary: `The AI reviewer is temporarily unavailable for this ${step.toLowerCase()} response in ${problem}. Your answer was not assigned a score.`,
+    strengths: [],
+    gaps: [],
+    suggestions: ["Retry feedback in a moment; the app will not guess at a score when the reviewers cannot inspect the answer."],
+    nextImprovement: "Retry the review before changing your design based on feedback.",
+  };
+}
+
 export async function POST(request: Request) {
   let body: { problem?: string; difficulty?: string; step?: string; stepPrompt?: string; answer?: string };
   try {
@@ -310,8 +320,15 @@ export async function POST(request: Request) {
       requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: context }], evaluationSchema, "lld_evaluation_a"),
       requestStructuredJson<Evaluation>(client, [{ role: "system", content: evaluationSystem }, { role: "user", content: `${context}\n\nIndependently verify the answer. Re-read it from the beginning and check every conditional, comment, and state transition before returning the evaluation.` }], evaluationSchema, "lld_evaluation_b"),
     ]);
+    const failedReviewers = reviewerResults.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     const successfulEvaluations = reviewerResults.filter((result): result is PromiseFulfilledResult<Evaluation> => result.status === "fulfilled").map((result) => normalizeEvaluation(result.value, rubric, answer));
-    if (!successfulEvaluations.length) throw new Error("Both independent feedback reviewers failed.");
+    if (failedReviewers.length) {
+      const reasons = failedReviewers.map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason)).slice(0, 2);
+      console.error("Independent feedback reviewer failure", reasons);
+    }
+    if (!successfulEvaluations.length) {
+      return NextResponse.json({ feedback: { ...feedbackWhenReviewersUnavailable(problem, step), score: "", numericScore: 0, reviewerUnavailable: true, criterionResults: rubric.map((criterion) => ({ id: criterion.id, label: criterion.label, importance: criterion.importance, status: "ambiguous", evidence: "", rationale: "The AI reviewers were unavailable; no score was inferred.", confidence: 0 })) } });
+    }
     const evaluation = successfulEvaluations.length === 1 ? { ...successfulEvaluations[0], logicSummary: `${successfulEvaluations[0].logicSummary} Only one reviewer was available for this review.` } : combineEvaluations(successfulEvaluations[0], successfulEvaluations[1]);
     const derived = deriveScore(evaluation, rubric, answer);
     const writerContext = `${context}\n\nVerified evidence map:\n${JSON.stringify(criterionResultsForUi(evaluation, rubric))}\n\nReviewer logic summary: ${evaluation.logicSummary}`;
