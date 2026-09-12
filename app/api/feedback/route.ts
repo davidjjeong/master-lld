@@ -236,6 +236,8 @@ const writerSystem = `You write concise coaching feedback for a new graduate eng
 
 Only use the verified evidence map. Do not introduce a gap unless the map marks that criterion missing, contradicted, or clearly ambiguous. When a candidate expresses the right logic indirectly, acknowledge it and do not repeat it as an improvement. Be flexible about pseudocode, syntax, naming, method signatures, and reasonable alternative class boundaries. Focus on invariants, ownership, state transitions, and whether the answer flows coherently.
 
+The only allowed improvement topics are criteria in the evidence map with a missing, contradicted, or ambiguous status. Do not add generic advice about concurrency, thread safety, persistence, uniqueness, distributed systems, timestamps, or other concerns unless the current step's rubric explicitly contains that topic or the answer creates a concrete problem there. If every criterion is covered or implicit, return an empty gaps array and an empty suggestions array.
+
 Keep the sections distinct: strengths describe what the answer already demonstrates; gaps identify at most two material risks; suggestions are concrete additions tied to this problem and this step; nextImprovement is one short action for the next attempt. Do not restate the same sentence in all sections. Keep each item to one or two short sentences. Do not mention hidden rubrics, reviewers, scoring mechanics, or a reference answer.`;
 
 function normalizeGeneratedFeedback(raw: GeneratedFeedback, problem: string, step: string): GeneratedFeedback {
@@ -247,6 +249,18 @@ function normalizeGeneratedFeedback(raw: GeneratedFeedback, problem: string, ste
     gaps: list(raw.gaps, 300),
     suggestions: list(raw.suggestions, 300),
     nextImprovement: clean(raw.nextImprovement, 300) || `Make one concrete improvement to this ${step.toLowerCase()} response and keep the main flow intact.`,
+  };
+}
+
+function finalizeGeneratedFeedback(generated: GeneratedFeedback, evaluation: Evaluation, problem: string, step: string) {
+  const normalizedFeedback = normalizeGeneratedFeedback(generated, problem, step);
+  const hasIssue = evaluation.criteria.some((item) => item.status === "missing" || item.status === "contradicted" || item.status === "ambiguous");
+  if (hasIssue) return normalizedFeedback;
+  return {
+    ...normalizedFeedback,
+    gaps: [],
+    suggestions: [],
+    nextImprovement: `No material changes are needed for this ${step.toLowerCase()} response. Keep the ${problem} logic concise and coherent in the next step.`,
   };
 }
 
@@ -360,7 +374,7 @@ export async function POST(request: Request) {
       console.error("LLM feedback writer failed; using verified deterministic summary", error);
       generated = feedbackFromEvaluation(evaluation, rubric, problem, step);
     }
-    return NextResponse.json({ feedback: { ...normalizeGeneratedFeedback(generated, problem, step), ...derived, criterionResults: criterionResultsForUi(evaluation, rubric) } });
+    return NextResponse.json({ feedback: { ...finalizeGeneratedFeedback(generated, evaluation, problem, step), ...derived, criterionResults: criterionResultsForUi(evaluation, rubric) } });
   } catch (error) {
     console.error("LLM feedback request failed", error);
     return NextResponse.json({ error: "Could not reach the configured AI coach for feedback." }, { status: 502 });
