@@ -117,7 +117,9 @@ function evidenceExcerpt(criterion: RubricCriterion, answer: string) {
 }
 
 function normalizeEvaluation(raw: Evaluation, rubric: RubricCriterion[], answer: string): Evaluation {
-  const byId = new Map(raw.criteria.map((criterion) => [criterion.id, criterion]));
+  const safeText = (value: unknown) => typeof value === "string" ? value.trim() : "";
+  const rawCriteria = Array.isArray(raw.criteria) ? raw.criteria : [];
+  const byId = new Map(rawCriteria.filter((criterion) => criterion && typeof criterion.id === "string").map((criterion) => [criterion.id, criterion]));
   const validStatuses = new Set<EvaluationStatus>(["covered", "implicit", "ambiguous", "missing", "contradicted"]);
   return {
     criteria: rubric.map((criterion) => {
@@ -133,12 +135,12 @@ function normalizeEvaluation(raw: Evaluation, rubric: RubricCriterion[], answer:
         id: criterion.id,
         status,
         evidence: hasEvidence ? quotedEvidence : "",
-        rationale: item.rationale.trim().slice(0, 260),
+        rationale: safeText(item.rationale).slice(0, 260) || "The reviewer provided no additional rationale.",
         confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0)),
       };
     }),
-    logicSummary: raw.logicSummary.trim().slice(0, 500),
-    contradictions: raw.contradictions.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean).slice(0, 4),
+    logicSummary: safeText(raw.logicSummary).slice(0, 500),
+    contradictions: (Array.isArray(raw.contradictions) ? raw.contradictions : []).filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean).slice(0, 4),
   };
 }
 
