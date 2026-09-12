@@ -192,9 +192,12 @@ async function requestStructuredJson<T>(client: OpenAI, messages: Array<{ role: 
       response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
     });
   } catch (error) {
-    // Older local OpenAI-compatible servers may not implement json_schema.
-    // Keep the same instructions and fall back to JSON mode only for local MLX.
-    if (!isLocalMlx()) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    // Groq can reject a generated response with json_validate_failed even
+    // when the request schema is valid. JSON mode lets our normalization layer
+    // recover the useful fields without treating a provider formatting issue
+    // as a failed interview review. It also supports older local MLX servers.
+    if (!isLocalMlx() && !/json|schema|validat/i.test(reason)) throw error;
     response = await client.chat.completions.create({
       ...requestOptions,
       messages: [{ role: "system", content: `${messages[0]?.content || ""}\nReturn only valid JSON matching this schema: ${JSON.stringify(schema)}` }, ...messages.slice(1)],
@@ -325,7 +328,7 @@ export async function POST(request: Request) {
     // hosted-model quota with two large requests at the same instant.
     for (const messages of reviewerMessages) {
       try {
-        reviewerResults.push({ status: "fulfilled", value: await requestStructuredJson<Evaluation>(client, messages, evaluationSchema, "lld_evaluation", 900) });
+        reviewerResults.push({ status: "fulfilled", value: await requestStructuredJson<Evaluation>(client, messages, evaluationSchema, "lld_evaluation", Math.min(1800, Math.max(900, 300 + rubric.length * 170))) });
       } catch (reason) {
         reviewerResults.push({ status: "rejected", reason });
       }
